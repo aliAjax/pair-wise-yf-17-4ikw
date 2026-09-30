@@ -1,126 +1,120 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { useStore } from "./useStore";
+import { BatchComposer } from "./Composer";
+import { Outbox } from "./Outbox";
+import { MergedView } from "./MergedView";
+import { ReportView } from "./ReportView";
+import { SyncPanel } from "./SyncPanel";
+import { Badge } from "./ui";
 
-const project = {
-  "sourceNo": 7,
-  "id": "hxyfront-62005",
-  "port": 62005,
-  "title": "管风琴音管调音记录",
-  "domain": "管风琴维护",
-  "prompt": "做一个给管风琴维护人员使用的音管调音记录前端项目，可以记录教堂或音乐厅名称、音栓、音管编号、音高、音分偏差、温湿度、簧片状态和维修备注。页面需要有音栓列表、调音偏差表、温湿度记录、异常音管标记和单次维护报告页。",
-  "palette": [
-    "#854d0e",
-    "#475569",
-    "#0ea5e9"
-  ],
-  "metrics": [
-    "音栓数量",
-    "偏差超限",
-    "温度",
-    "湿度"
-  ],
-  "filters": [
-    "主音栓",
-    "簧片音栓",
-    "混合音栓",
-    "低音管"
-  ],
-  "fields": [
-    "场馆名称",
-    "音栓",
-    "音管编号",
-    "音高",
-    "音分偏差",
-    "维修备注"
-  ],
-  "records": [
-    [
-      "St.Mary",
-      "Trumpet 8'",
-      "C#4 +9cent",
-      "簧片需微调"
-    ],
-    [
-      "ConcertHall A",
-      "Principal 4'",
-      "G3 -3cent",
-      "正常"
-    ],
-    [
-      "Abbey Room",
-      "Bourdon 16'",
-      "F2 -12cent",
-      "标记复检"
-    ]
-  ]
-};
+type Tab = "record" | "ledger" | "report" | "sync";
+
+const TABS: [Tab, string][] = [
+  ["record", "现场补记"],
+  ["ledger", "工单合并台"],
+  ["report", "单次维护报告"],
+  ["sync", "同步与故障恢复"],
+];
 
 function App() {
+  const store = useStore();
+  const [tab, setTab] = useState<Tab>("record");
+  const m = useMemo(() => store.merged(), [store.state.serverBatches]);
+  const { report, stale } = store.reportStatus();
+  const overLimit = [...m.pipes.values()].filter((p) => {
+    const n = parseFloat(p.fields.cent?.value ?? "");
+    return Number.isFinite(n) && Math.abs(n) > 5;
+  }).length;
+  const abnormal = [...m.pipes.values()].filter((p) => p.abnormal).length;
+
+  if (!store.state.ready) return null;
+
   return (
     <main className="app">
       <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
+        <p>hxyfront-62005 · 可续作现场维护 · {store.state.currentDeviceId}</p>
+        <h1>管风琴音管调音记录台</h1>
+        <span>
+          离线可记录、每笔修改带设备序号与连续记录号；网络恢复后按音管和字段合并，
+          同字段两边都改过则两版并存待裁决；未确认记录不进入单次维护报告；
+          音栓复检完成前异常音管不能解除；温湿度变化使旧偏差结论与旧报告失效重算。
+        </span>
       </section>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[86, 14, 7, 32][index] ?? 12}</strong>
-          </article>
+        <article>
+          <small>音栓数量</small>
+          <strong>{m.stops.size}</strong>
+        </article>
+        <article>
+          <small>偏差超限(±5音分)</small>
+          <strong>{overLimit}</strong>
+        </article>
+        <article>
+          <small>异常音管</small>
+          <strong>{abnormal}</strong>
+        </article>
+        <article>
+          <small>当前温度 / 湿度</small>
+          <strong>
+            {m.climate ? `${m.climate.temperature}°/${m.climate.humidity}%` : "—"}
+          </strong>
+        </article>
+      </section>
+
+      <nav className="tabs">
+        {TABS.map(([key, label]) => (
+          <button
+            key={key}
+            data-testid={`tab-${key}`}
+            className={tab === key ? "tab active" : "tab"}
+            onClick={() => setTab(key)}
+          >
+            {label}
+            {key === "record" && store.state.drafts.length > 0 && (
+              <Badge tone="amber">{store.state.drafts.length}</Badge>
+            )}
+            {key === "report" && stale && <Badge tone="red">重算</Badge>}
+            {key === "sync" && store.state.localConfirmed.length > 0 && !store.state.online && (
+              <Badge tone="blue">{store.state.localConfirmed.length}</Badge>
+            )}
+          </button>
         ))}
-      </section>
+      </nav>
 
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}筛选</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
+      {store.state.notices.length > 0 && (
+        <section className="notices">
+          {store.state.notices.map((n) => (
+            <div key={n.id} className={`notice notice-${n.kind}`}>
+              {n.text}
             </div>
-            <button className="primary">保存草稿</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>历史记录</p>
-            <h2>近期工作台</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
           ))}
-        </div>
-      </section>
+          <button className="notice-clear" onClick={() => store.clearNotices()}>
+            清空提示
+          </button>
+        </section>
+      )}
+
+      <div className="tab-body">
+        {tab === "record" && (
+          <div className="stack">
+            <BatchComposer />
+            <Outbox />
+          </div>
+        )}
+        {tab === "ledger" && <MergedView />}
+        {tab === "report" && <ReportView />}
+        {tab === "sync" && <SyncPanel />}
+      </div>
+
+      <footer className="app-footer">
+        <span>
+          工单 WO-2026-StMary · 去重后记录 {store.maintenanceCount()} 笔 ·
+          待裁决冲突 {m.conflicts.filter((c) => !c.resolution).length} ·
+          报告 {report ? (stale ? "待重算" : "有效") : "未生成"}
+        </span>
+      </footer>
     </main>
   );
 }
